@@ -2018,6 +2018,10 @@ connect(m.Button1Down, function()
     )
 end)
 
+-- HEARTBEAT
+-- Atualiza as marcações independentemente do Radar Players.
+-- A descoberta de novos jogadores continua dependendo do radar.
+
 connect(R.Heartbeat, function()
     if guiClosed then return end
 
@@ -2025,6 +2029,41 @@ connect(R.Heartbeat, function()
 
     local root = c and c:FindFirstChild(HRP)
     local hum = c and c:FindFirstChildOfClass("Humanoid")
+
+    -- ATUALIZAÇÃO DAS MARCAÇÕES DOS JOGADORES
+    -- Agora funciona mesmo com o Radar Players desligado.
+
+    for _, item in ipairs(bk.playerPoints) do
+        local target = item.PlayerObj
+        local character = target and target.Character
+
+        local head = character and character:FindFirstChild("Head")
+        local torso = getPlayerTorso(character)
+
+        if head and torso then
+            -- Mantém a posição atualizada.
+            item.Pos = head.Position
+
+            -- Faz o nome acompanhar a cabeça.
+            if item.Ancor and item.Ancor.Parent then
+                item.Ancor.Position = head.Position + Vector3.new(0, 10, 0)
+            end
+
+            -- Atualiza a referência do torso após respawn.
+            if item.TargetPart ~= torso then
+                item.TargetPart = torso
+            end
+
+            -- Emite a partícula somente se ainda não houve emissão.
+            if not item.ParticleEmitted then
+                item.ParticleAttachment = createPlayerParticle(torso)
+
+                if item.ParticleAttachment then
+                    item.ParticleEmitted = true
+                end
+            end
+        end
+    end
 
     if not root or not hum then return end
 
@@ -2040,6 +2079,7 @@ connect(R.Heartbeat, function()
     end
 
     -- RADAR DE JOGADORES
+    -- Continua responsável apenas por encontrar e marcar novos jogadores.
 
     if bk.pl_rad then
         if zone then
@@ -2110,39 +2150,6 @@ connect(R.Heartbeat, function()
 
                             rebuildLists()
                         end
-                    end
-                end
-            end
-        end
-
-        -- ATUALIZAÇÃO DAS MARCAÇÕES DOS JOGADORES
-
-        for _, item in ipairs(bk.playerPoints) do
-            local target = item.PlayerObj
-            local character = target and target.Character
-
-            local head = character and character:FindFirstChild("Head")
-            local torso = getPlayerTorso(character)
-
-            if head and torso then
-                -- O nome continua acima da cabeça.
-                item.Pos = head.Position
-
-                if item.Ancor and item.Ancor.Parent then
-                    item.Ancor.Position = head.Position + Vector3.new(0, 10, 0)
-                end
-
-                -- Atualiza a referência do torso sem emitir novamente.
-                if item.TargetPart ~= torso then
-                    item.TargetPart = torso
-                end
-
-                -- Só tenta emitir se ainda não houve emissão nessa marcação.
-                if not item.ParticleEmitted then
-                    item.ParticleAttachment = createPlayerParticle(torso)
-
-                    if item.ParticleAttachment then
-                        item.ParticleEmitted = true
                     end
                 end
             end
