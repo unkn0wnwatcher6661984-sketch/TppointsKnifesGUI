@@ -1,10 +1,10 @@
-
 local P = game:GetService("Players")
 local W = game:GetService("Workspace")
 local U = game:GetService("UserInputService")
 local R = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local GuiService = game:GetService("GuiService")
+local Debris = game:GetService("Debris")
 
 local pl = P.LocalPlayer
 if not pl then return end
@@ -168,11 +168,67 @@ local function tp(pos, isPl, tPl)
     c:PivotTo(CFrame.new(dest + Vector3.new(0, 3, 0)))
 end
 
--- SISTEMA DE FACAS
+-- SISTEMA DE PARTÍCULAS
 
--- A ponta local da faca fica alinhada com a normal da superfície.
--- A lâmina aponta para dentro da superfície, independentemente
--- de a faca ser colocada numa parede, no chão ou no teto.
+local PLAYER_PARTICLE_TEXTURE = "rbxassetid://107191322906317"
+
+-- Efeito menor para as facas.
+-- O tamanho é calculado proporcionalmente à altura da faca.
+
+local function createKnifeParticle(knife)
+    if guiClosed or not knife or not knife:IsA("BasePart") then
+        return nil
+    end
+
+    local attachment = Instance.new("Attachment")
+    attachment.Name = "TP_KnifeParticleAttachment_" .. TP_INSTANCE_ID
+    attachment.Position = Vector3.zero
+    attachment.Parent = knife
+
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Name = "TP_KnifeParticle_" .. TP_INSTANCE_ID
+    emitter.Texture = PLAYER_PARTICLE_TEXTURE
+
+    emitter.Enabled = false
+    emitter.Rate = 0
+    emitter.Lifetime = NumberRange.new(2)
+    emitter.Speed = NumberRange.new(0, 0)
+    emitter.Drag = 0
+    emitter.Acceleration = Vector3.zero
+    emitter.SpreadAngle = Vector2.new(0, 0)
+
+    local particleSize = knife.Size.Y * 0.8
+
+    emitter.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, particleSize),
+        NumberSequenceKeypoint.new(0.5, particleSize),
+        NumberSequenceKeypoint.new(1, particleSize)
+    })
+
+    emitter.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0),
+        NumberSequenceKeypoint.new(0.75, 0.15),
+        NumberSequenceKeypoint.new(1, 1)
+    })
+
+    emitter.Rotation = NumberRange.new(0, 360)
+    emitter.RotSpeed = NumberRange.new(12, 12)
+    emitter.LockedToPart = true
+    emitter.VelocityInheritance = 1
+    emitter.LightInfluence = 0
+    emitter.ZOffset = 0
+    emitter.Parent = attachment
+
+    emitter:Emit(1)
+
+    Debris:AddItem(attachment, 2.2)
+
+    return attachment
+end
+
+-- SISTEMA DE FACAS
+-- As facas continuam reservadas para TPPoints e Safe Point.
+-- Os marcadores de jogadores usam partículas separadamente.
 
 local function getKnifeCFrame(position, normal, tipOffset)
     if typeof(normal) ~= "Vector3" or normal.Magnitude < 0.001 then
@@ -181,12 +237,7 @@ local function getKnifeCFrame(position, normal, tipOffset)
         normal = normal.Unit
     end
 
-    -- O eixo Y local aponta da base da faca para a ponta.
-    -- A ponta deve apontar contra a normal, entrando na superfície.
     local bladeAxis = -normal
-
-    -- Escolhe um eixo de referência que não seja paralelo
-    -- à direção da lâmina, evitando uma base degenerada.
     local reference = Vector3.yAxis
 
     if math.abs(reference:Dot(bladeAxis)) > 0.95 then
@@ -201,7 +252,6 @@ local function getKnifeCFrame(position, normal, tipOffset)
     end
 
     right = right.Unit
-
     local back = right:Cross(bladeAxis).Unit
 
     local rotation = CFrame.fromMatrix(
@@ -211,12 +261,8 @@ local function getKnifeCFrame(position, normal, tipOffset)
         back
     )
 
-    -- Usa a posição real da ponta, não o centro da faca.
     local localTip = tipOffset or Vector3.new(0, 1.32, 0)
     local worldTipOffset = rotation:VectorToWorldSpace(localTip)
-
-    -- Pequena penetração para a ponta não ficar visualmente
-    -- separada da parede ou da superfície.
     local embeddedTipPosition = position - normal * 0.025
 
     return CFrame.new(
@@ -335,8 +381,6 @@ local function createAnchoredKnife(position, normal, name, supportPart, kind, ta
 
     local knife = Instance.new("Part")
 
-    -- A malha clássica inteira é identificada como Blade.
-    -- Não é possível separar a geometria interna do SpecialMesh.
     knife.Name = kind == "map" and "Blade" or (name or "Blade")
     knife.Size = Vector3.new(0.3, 2.2, 0.6)
     knife.Anchored = true
@@ -368,18 +412,18 @@ local function createAnchoredKnife(position, normal, name, supportPart, kind, ta
 
     local tip = Instance.new("Attachment")
     tip.Name = "BladeTip"
-
-    -- A ponta visual da malha considera a escala 1.2.
     tip.Position = Vector3.new(
         0,
         (knife.Size.Y / 2) * mesh.Scale.Y,
         0
     )
-
     tip.Parent = knife
 
     knife.CFrame = getKnifeCFrame(position, normal, tip.Position)
     knife.Parent = W
+
+    -- Efeito visual da faca: menor e com duração de 2 segundos.
+    createKnifeParticle(knife)
 
     local record = {
         Knife = knife,
@@ -424,6 +468,74 @@ local function setAllKnivesAnchoring()
             knifeRecords[knife] = nil
         end
     end
+end
+
+-- SISTEMA DE PARTÍCULAS DOS JOGADORES
+
+local function getPlayerTorso(character)
+    if not character then return nil end
+
+    return character:FindFirstChild("UpperTorso")
+        or character:FindFirstChild("Torso")
+        or character:FindFirstChild(HRP)
+end
+
+local function destroyPlayerParticle(attachment)
+    if attachment then
+        pcall(function()
+            attachment:Destroy()
+        end)
+    end
+end
+
+local function createPlayerParticle(torso)
+    if guiClosed or not torso or not torso:IsA("BasePart") then
+        return nil
+    end
+
+    local attachment = Instance.new("Attachment")
+    attachment.Name = "TP_PlayerParticleAttachment_" .. TP_INSTANCE_ID
+    attachment.Position = Vector3.zero
+    attachment.Parent = torso
+
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Name = "TP_PlayerParticle_" .. TP_INSTANCE_ID
+    emitter.Texture = PLAYER_PARTICLE_TEXTURE
+
+    emitter.Enabled = false
+    emitter.Rate = 0
+    emitter.Lifetime = NumberRange.new(3)
+    emitter.Speed = NumberRange.new(0, 0)
+    emitter.Drag = 0
+    emitter.Acceleration = Vector3.zero
+    emitter.SpreadAngle = Vector2.new(0, 0)
+
+    emitter.Size = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 5.2),
+        NumberSequenceKeypoint.new(0.5, 5.2),
+        NumberSequenceKeypoint.new(1, 5.2)
+    })
+
+    emitter.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0),
+        NumberSequenceKeypoint.new(0.75, 0.15),
+        NumberSequenceKeypoint.new(1, 1)
+    })
+
+    emitter.Rotation = NumberRange.new(0, 360)
+    emitter.RotSpeed = NumberRange.new(12, 12)
+
+    emitter.LockedToPart = true
+    emitter.VelocityInheritance = 1
+    emitter.LightInfluence = 0
+    emitter.ZOffset = 0
+    emitter.Parent = attachment
+
+    emitter:Emit(1)
+
+    Debris:AddItem(attachment, 3.5)
+
+    return attachment
 end
 
 local function getClickedSurface()
@@ -822,6 +934,7 @@ local function addListButton(pos, isPl, targetPlayer, index, surfaceNormal, surf
 
     local knife
 
+    -- Somente os pontos do mapa recebem facas.
     if not isPl then
         knife = createAnchoredKnife(
             pos,
@@ -856,7 +969,9 @@ local function addListButton(pos, isPl, targetPlayer, index, surfaceNormal, surf
             PlName = targetPlayer.Name,
             PlayerObj = targetPlayer,
             Ancor = anchor,
-            Knife = knife
+            ParticleAttachment = nil,
+            TargetPart = nil,
+            ParticleEmitted = false
         })
     else
         table.insert(bk.mapPoints, {
@@ -879,8 +994,14 @@ local function removePlayerPointByPlayer(targetPlayer)
         local item = bk.playerPoints[i]
 
         if item.PlayerObj == targetPlayer or item.PlName == targetPlayer.Name then
-            if item.Ancor then item.Ancor:Destroy() end
-            if item.Knife then destroyKnife(item.Knife) end
+            if item.Ancor then
+                item.Ancor:Destroy()
+            end
+
+            if item.ParticleAttachment then
+                destroyPlayerParticle(item.ParticleAttachment)
+            end
+
             table.remove(bk.playerPoints, i)
         end
     end
@@ -899,8 +1020,13 @@ end
 
 local function clearPlayerPoints()
     for _, item in ipairs(bk.playerPoints) do
-        if item.Ancor then item.Ancor:Destroy() end
-        if item.Knife then destroyKnife(item.Knife) end
+        if item.Ancor then
+            item.Ancor:Destroy()
+        end
+
+        if item.ParticleAttachment then
+            destroyPlayerParticle(item.ParticleAttachment)
+        end
     end
 
     table.clear(bk.playerPoints)
@@ -1007,7 +1133,10 @@ local function closeThisInstance()
 
     for _, item in ipairs(bk.playerPoints) do
         if item.Ancor then item.Ancor:Destroy() end
-        if item.Knife then destroyKnife(item.Knife) end
+
+        if item.ParticleAttachment then
+            destroyPlayerParticle(item.ParticleAttachment)
+        end
     end
 
     if safe_data then
@@ -1922,8 +2051,9 @@ connect(R.Heartbeat, function()
                 local otherCharacter = other.Character
                 local otherRoot = otherCharacter:FindFirstChild(HRP)
                 local otherHead = otherCharacter:FindFirstChild("Head")
+                local otherTorso = getPlayerTorso(otherCharacter)
 
-                if otherRoot and otherHead then
+                if otherRoot and otherHead and otherTorso then
                     local distance = (root.Position - otherRoot.Position).Magnitude
 
                     if distance <= bk.players_radar_studs then
@@ -1945,16 +2075,8 @@ connect(R.Heartbeat, function()
                                 true
                             )
 
-                            local headTop = otherHead.Position + Vector3.new(0, otherHead.Size.Y / 2, 0)
-
-                            local knife = createAnchoredKnife(
-                                headTop,
-                                Vector3.new(0, -1, 0),
-                                "TP_PlayerKnife_" .. other.Name .. "_" .. TP_INSTANCE_ID,
-                                otherHead,
-                                "player",
-                                otherHead
-                            )
+                            -- A partícula nasce no torso.
+                            local particleAttachment = createPlayerParticle(otherTorso)
 
                             connect(label.MouseButton1Click, function()
                                 if guiClosed then return end
@@ -1979,8 +2101,11 @@ connect(R.Heartbeat, function()
                                 PlName = other.Name,
                                 PlayerObj = other,
                                 Ancor = anchor,
-                                Knife = knife,
-                                TargetPart = otherHead
+                                ParticleAttachment = particleAttachment,
+                                TargetPart = otherTorso,
+
+                                -- Impede a emissão repetida após o Debris destruir o efeito.
+                                ParticleEmitted = particleAttachment ~= nil
                             })
 
                             rebuildLists()
@@ -1990,90 +2115,35 @@ connect(R.Heartbeat, function()
             end
         end
 
-        -- ATUALIZAÇÃO DAS MARCAÇÕES DO RADAR
+        -- ATUALIZAÇÃO DAS MARCAÇÕES DOS JOGADORES
 
         for _, item in ipairs(bk.playerPoints) do
             local target = item.PlayerObj
             local character = target and target.Character
 
             local head = character and character:FindFirstChild("Head")
-            local targetRoot = character and character:FindFirstChild(HRP)
+            local torso = getPlayerTorso(character)
 
-            if head and targetRoot then
+            if head and torso then
+                -- O nome continua acima da cabeça.
                 item.Pos = head.Position
 
                 if item.Ancor and item.Ancor.Parent then
                     item.Ancor.Position = head.Position + Vector3.new(0, 10, 0)
                 end
 
-                if item.TargetPart ~= head then
-                    if item.Knife then destroyKnife(item.Knife) end
-
-                    item.TargetPart = head
-
-                    local headTop = head.Position + Vector3.new(0, head.Size.Y / 2, 0)
-
-                    item.Knife = createAnchoredKnife(
-                        headTop,
-                        Vector3.new(0, -1, 0),
-                        "TP_PlayerKnife_" .. item.PlName .. "_" .. TP_INSTANCE_ID,
-                        head,
-                        "player",
-                        head
-                    )
+                -- Atualiza a referência do torso sem emitir novamente.
+                if item.TargetPart ~= torso then
+                    item.TargetPart = torso
                 end
 
-                local record = item.Knife and knifeRecords[item.Knife]
+                -- Só tenta emitir se ainda não houve emissão nessa marcação.
+                if not item.ParticleEmitted then
+                    item.ParticleAttachment = createPlayerParticle(torso)
 
-                if record and bk.anchored_knifes then
-                    record.TargetPart = head
-
-                    if head.Parent then
-                        if record.RelativeCFrame then
-                            item.Knife.CFrame = head.CFrame * record.RelativeCFrame
-                        else
-                            local headTop = head.Position + Vector3.new(0, head.Size.Y / 2, 0)
-                            item.Knife.CFrame = getKnifeCFrame(
-                                headTop,
-                                Vector3.new(0, -1, 0),
-                                record.Tip and record.Tip.Position
-                            )
-                            record.RelativeCFrame = head.CFrame:ToObjectSpace(item.Knife.CFrame)
-                        end
+                    if item.ParticleAttachment then
+                        item.ParticleEmitted = true
                     end
-                end
-            end
-        end
-
-        -- ATUALIZAÇÃO DAS FACAS ANCORADAS DOS JOGADORES
-
-        if bk.anchored_knifes then
-            for knife, record in pairs(knifeRecords) do
-                if knife and knife.Parent and record.Kind == "player" then
-                    local targetPart = record.TargetPart
-
-                    if targetPart and targetPart.Parent and record.RelativeCFrame then
-                        knife.CFrame = targetPart.CFrame * record.RelativeCFrame
-                    end
-                end
-            end
-        end
-
-        -- LIMPEZA DE SUPORTES DESTRUÍDOS
-
-        if not bk.anchored_knifes then
-            for knife, record in pairs(knifeRecords) do
-                if knife and knife.Parent then
-                    if record.Support and not record.Support.Parent then
-                        removeKnifeWeld(record)
-                        record.Support = nil
-                        record.SurfacePart = nil
-                        knife.Anchored = false
-                        knife.CanCollide = true
-                        knife.CanTouch = true
-                    end
-                else
-                    knifeRecords[knife] = nil
                 end
             end
         end
